@@ -1,36 +1,50 @@
-Development Finance Calculator
+# Development Finance Calculator
+
+## Overview
+
 This project is an interactive Streamlit dashboard that models a real-estate development deal on a monthly timeline. I built it to feel like a lightweight decision-support tool a finance analyst could use for quick screening, scenario testing, and liquidity checks. Instead of a static spreadsheet, it recalculates immediately when assumptions change, so you can see how profitability and risk respond to different prices, costs, timelines, and financing terms.
 
-The core output of the app is a month-by-month cashflow table and a set of deal KPIs. On top of profitability (NPV, IRR, ROI, payback), the dashboard emphasizes liquidity and funding risk by simulating debt/equity financing, interest accrual, and debt repayment. This makes the project closer to how real development models are used in practice: not only “is it profitable?”, but also “can we finance it and survive the negative-cash period?”
+## Features
 
-The model runs on monthly periods, where each row in the cashflow represents one month of the project. Construction spending is not distributed evenly. Instead, it follows a simple S-curve (20% / 60% / 20%) to reflect ramp-up, peak construction, and tapering. Soft costs and contingency are modeled as percentages of total construction cost and are distributed proportionally to monthly construction spend. Land is treated as an upfront cash outflow at the start of the project. Revenue begins at a chosen sales start month and follows an absorption rate measured in square meters per month, with a strict cap so the model cannot sell more area than exists.
+- **Monthly cash-flow modeling** with realistic S-curve construction spend
+- **Debt/equity financing** and liquidity simulation
+- **AI CFO Review** via the Gemini API to generate a short investment-committee style risk memo
 
-A key feature is the financing and liquidity logic. When monthly operating cash flow is negative, the model covers the deficit using a mix of equity and debt based on an equity share assumption. Interest accrues on outstanding debt using a monthly rate derived from the annual interest rate. When the project becomes cash-positive, available cash is used to repay debt (up to the remaining balance), and any leftover cash accumulates as cash balance. Repayment is tracked explicitly so the “after financing” cash flow remains consistent and transparent, rather than hiding repayment inside balance changes.
+## Project Structure
 
-The dashboard also includes a Downside mode for stress testing. When enabled, it applies shocks to sales price and construction cost, and it can delay the project timeline. The delay also pushes the sales start month forward, which is a common real-world failure mode: revenue arrives later while costs and financing continue, increasing interest and liquidity pressure. The goal is not to build a perfect institutional-grade model, but to provide realistic knobs for quickly testing how fragile or resilient the deal is.
+### `app.py`
+The Streamlit entry point that handles the user interface. It defines the sidebar controls, builds the inputs dictionary, calls the finance model to generate the cashflow table, calls the metrics function to compute KPIs, and renders the results. It also wires up the “AI CFO Review” button, which builds a prompt from the model outputs and displays the returned memo.
 
-Finally, the app includes an optional “AI CFO Review” feature. When triggered, the app packages a compact snapshot of the current inputs, computed KPIs, and a preview of the cashflow and sends it to Gemini. Gemini responds with an investment-committee style memo: verdict, key risks, what to verify, sensitivity guidance, and next steps. Importantly, all calculations are deterministic in Python; the AI is used only for interpretation and decision-support narrative.
+### `src/model.py`
+Contains the deterministic finance model and KPI calculations. The `cashflow(inputs)` function builds a monthly table with revenue, land cost, construction costs (S-curve), soft costs, contingency, and the resulting cash flow before financing. It then simulates financing with equity draws, debt draws, interest, and repayment, producing a complete “after financing” view of liquidity. This file also includes `compute_metrics(df, inputs)`, which calculates project-level profitability and risk indicators, including NPV (discounted monthly cash flows), annualized IRR, ROI, payback month, peak cash need, maximum debt outstanding, total interest, equity invested, and ending cash balance.
 
-Files and project structure
+### `src/charts.py`
+Contains the Plotly chart functions. Each function takes the cashflow dataframe and returns a Plotly figure for Streamlit to display. The main charts are cumulative cash flow (with the payback point), debt outstanding over time, cash balance over time, and an optional revenue vs monthly costs chart.
 
-app.py is the Streamlit entry point and the only file that directly handles the user interface. It defines the sidebar controls, builds the inputs dictionary, calls the finance model to generate the cashflow table, calls the metrics function to compute KPIs, and renders the results. It also wires up the “AI CFO Review” button: it builds a prompt from the model outputs and displays the returned memo. I kept app.py focused on orchestration so that the business logic stays testable and reusable outside the UI.
+### `src/ai.py`
+Handles the Gemini API integration. It builds a CFO-style prompt using the current input assumptions, computed metrics, and a short preview of the cashflow and sends it to Gemini via the Google GenAI SDK.
 
-src/model.py contains the deterministic finance model and KPI calculations. The cashflow(inputs) function builds a monthly table with revenue, land cost, construction costs (S-curve), soft costs, contingency, and the resulting cash flow before financing. It then simulates financing with equity draws, debt draws, interest, and repayment, producing a complete “after financing” view of liquidity. This file also includes compute_metrics(df, inputs), which calculates project-level profitability and risk indicators, including NPV (discounted monthly cash flows), annualized IRR, ROI, payback month, peak cash need (maximum negative cumulative cash flow before financing), maximum debt outstanding, total interest, equity invested, ending cash balance, and margin on revenue. Keeping the model in a separate module makes it easier to validate the logic and prevents UI code from becoming a large unstructured script.
+### `src/init.py`
+Exists to make the `src` folder importable as a Python package, allowing clean imports like `from src.model import cashflow`.
 
-src/charts.py contains the Plotly chart functions. Each function takes the cashflow dataframe and returns a Plotly figure for Streamlit to display. I separated chart creation from the UI to keep the dashboard clean and to make it easy to add or adjust charts without touching the model logic. The main charts are cumulative cash flow (with the payback point), debt outstanding over time, cash balance over time, and an optional revenue vs monthly costs chart.
+## Design Choices and Trade-offs
 
-src/ai.py contains the Gemini integration. It builds a CFO-style prompt using the current input assumptions, computed metrics, and a short preview of the cashflow (head and tail rows) and sends it to Gemini via the Google GenAI SDK. I intentionally kept this file independent from Streamlit so the AI logic can be reused or replaced. The Gemini model name is defined here as a default, so the UI does not need to repeat model configuration.
+A major design decision was to use a monthly timeline and a simplified S-curve rather than a detailed construction schedule. Monthly periods are a good balance between realism and complexity: they capture liquidity stress and interest accumulation without requiring an overly detailed schedule. The 20/60/20 S-curve is intentionally simple but produces more realistic cost timing than flat spending.
 
-src/__init__.py is not used for application logic. It exists only to make the src folder importable as a Python package, allowing clean imports like from src.model import cashflow. No code depends on __init__.py beyond package structure.
-
-Design choices and trade-offs
-
-A major design decision was to use a monthly timeline and a simplified S-curve rather than a detailed construction schedule. Monthly periods are a good balance between realism and complexity: they capture liquidity stress and interest accumulation without requiring an overly detailed schedule. The 20/60/20 S-curve is intentionally simple, but it produces much more realistic cost timing than flat spending and makes the charts and payback behavior believable.
-
-Another choice was to include financing and repayment rather than only computing unlevered project metrics. In development deals, “peak cash need” and “maximum debt” are often as important as IRR. Adding debt/equity draws, interest, and repayment makes the model more realistic and creates a more informative dashboard. I also tracked debt_repay explicitly so after-financing cash flows remain understandable and auditable.
+Another choice was to include financing and repayment rather than only computing unlevered project metrics. In development deals, “peak cash need” and “maximum debt” are often as important as IRR. Adding debt/equity draws, interest, and repayment makes the model more realistic and creates a more informative dashboard.
 
 For AI integration, I chose a CFO memo style rather than a general chat. The goal is to generate a consistent decision-ready review (verdict, risks, what to verify, and actions) instead of open-ended conversation. The app remains fully functional without AI; the AI review is optional and does not affect calculations.
 
-Running the project
+## Running the Project
 
-Install dependencies from requirements.txt, then run the app with streamlit run app.py. If you want to use “AI CFO Review,” enter a Gemini API key in the sidebar. The rest of the dashboard works without any key.
+1. Install dependencies from `requirements.txt`:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+2. Run the app:
+    ```bash
+    streamlit run app.py
+    ```
+
+3. Enter your **Gemini API key** in the sidebar to use the “AI CFO Review”.
